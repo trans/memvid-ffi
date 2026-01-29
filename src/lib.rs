@@ -27,6 +27,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 mod ask;
+mod doctor;
 mod error;
 mod frame;
 mod handle;
@@ -40,6 +41,7 @@ mod verify;
 
 // Re-export all public FFI types and functions
 pub use ask::memvid_ask;
+pub use doctor::{memvid_doctor, memvid_doctor_apply, memvid_doctor_plan};
 pub use error::{memvid_error_free, MemvidError, MemvidErrorCode};
 pub use frame::{memvid_delete_frame, memvid_frame_by_id, memvid_frame_by_uri, memvid_frame_content};
 pub use handle::MemvidHandle;
@@ -615,6 +617,69 @@ mod tests {
 
         unsafe { memvid_string_free(result_ptr) };
         unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_doctor() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_doctor.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+
+        // Create a valid memory file
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+        let content = b"Content for doctor test.";
+        unsafe { memvid_put_bytes(handle, content.as_ptr(), content.len(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+        unsafe { memvid_close(handle) };
+
+        // Run doctor (should report clean)
+        let report_ptr = unsafe { memvid_doctor(path_cstr.as_ptr(), std::ptr::null(), &mut error) };
+        assert!(!report_ptr.is_null());
+        assert_eq!(error.code, MemvidErrorCode::Ok);
+
+        let report_str = unsafe { std::ffi::CStr::from_ptr(report_ptr) };
+        let json = report_str.to_str().unwrap();
+        assert!(json.contains("\"status\""));
+        assert!(json.contains("\"plan\""));
+        assert!(json.contains("\"metrics\""));
+
+        unsafe { memvid_string_free(report_ptr) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_doctor_plan() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_doctor_plan.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+
+        // Create a valid memory file
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+        let content = b"Content for doctor plan test.";
+        unsafe { memvid_put_bytes(handle, content.as_ptr(), content.len(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+        unsafe { memvid_close(handle) };
+
+        // Get doctor plan
+        let plan_ptr =
+            unsafe { memvid_doctor_plan(path_cstr.as_ptr(), std::ptr::null(), &mut error) };
+        assert!(!plan_ptr.is_null());
+        assert_eq!(error.code, MemvidErrorCode::Ok);
+
+        let plan_str = unsafe { std::ffi::CStr::from_ptr(plan_ptr) };
+        let json = plan_str.to_str().unwrap();
+        assert!(json.contains("\"version\""));
+        assert!(json.contains("\"file_path\""));
+        assert!(json.contains("\"phases\""));
+
+        unsafe { memvid_string_free(plan_ptr) };
         let _ = std::fs::remove_file(&path);
     }
 

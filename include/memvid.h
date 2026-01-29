@@ -542,6 +542,53 @@ char *memvid_verify(const char *path, int deep, MemvidError *error);
 char *memvid_ask(MemvidHandle *handle, const char *request_json, MemvidError *error);
 
 /* ============================================================================
+ * Doctor (File Repair) Functions
+ * ============================================================================ */
+
+/**
+ * Run doctor diagnostics and optionally repair a memory file.
+ *
+ * The file should NOT be open when running doctor.
+ *
+ * @param path         Path to the .mv2 file (null-terminated UTF-8 string)
+ * @param options_json JSON string with doctor options (NULL for defaults)
+ * @param error        Out-parameter for error information (may be NULL)
+ *
+ * @return JSON string with doctor report on success, NULL on failure.
+ *         Caller must free with memvid_string_free().
+ *
+ * Options JSON: { "rebuild_time_index": false, "rebuild_lex_index": false,
+ *                 "vacuum": false, "dry_run": false, "quiet": false }
+ *
+ * Status values: "clean", "healed", "partial", "failed", "plan_only"
+ */
+char *memvid_doctor(const char *path, const char *options_json, MemvidError *error);
+
+/**
+ * Create a doctor repair plan without executing it.
+ *
+ * @param path         Path to the .mv2 file (null-terminated UTF-8 string)
+ * @param options_json JSON string with doctor options (NULL for defaults)
+ * @param error        Out-parameter for error information (may be NULL)
+ *
+ * @return JSON string with doctor plan on success, NULL on failure.
+ *         Caller must free with memvid_string_free().
+ */
+char *memvid_doctor_plan(const char *path, const char *options_json, MemvidError *error);
+
+/**
+ * Apply a previously created doctor plan.
+ *
+ * @param path      Path to the .mv2 file (null-terminated UTF-8 string)
+ * @param plan_json JSON string with doctor plan (from memvid_doctor_plan)
+ * @param error     Out-parameter for error information (may be NULL)
+ *
+ * @return JSON string with doctor report on success, NULL on failure.
+ *         Caller must free with memvid_string_free().
+ */
+char *memvid_doctor_apply(const char *path, const char *plan_json, MemvidError *error);
+
+/* ============================================================================
  * Memory Management Functions
  * ============================================================================ */
 
