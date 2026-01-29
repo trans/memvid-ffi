@@ -26,6 +26,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+mod ask;
 mod error;
 mod frame;
 mod handle;
@@ -38,6 +39,7 @@ mod util;
 mod verify;
 
 // Re-export all public FFI types and functions
+pub use ask::memvid_ask;
 pub use error::{memvid_error_free, MemvidError, MemvidErrorCode};
 pub use frame::{memvid_delete_frame, memvid_frame_by_id, memvid_frame_by_uri, memvid_frame_content};
 pub use handle::MemvidHandle;
@@ -562,6 +564,57 @@ mod tests {
         assert!(json.contains("\"overall_status\":\"passed\""));
 
         unsafe { memvid_string_free(report_ptr) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_ask() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_ask.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+
+        // Add some content to search
+        let content1 = b"The capital of France is Paris. It is known for the Eiffel Tower.";
+        let content2 = b"Berlin is the capital of Germany. It has a famous wall.";
+        let content3 = b"Tokyo is the capital of Japan. It is a very large city.";
+        unsafe { memvid_put_bytes(handle, content1.as_ptr(), content1.len(), &mut error) };
+        unsafe { memvid_put_bytes(handle, content2.as_ptr(), content2.len(), &mut error) };
+        unsafe { memvid_put_bytes(handle, content3.as_ptr(), content3.len(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+
+        // Ask a question (context_only mode - no LLM synthesis)
+        let ask_json =
+            CString::new(r#"{"question": "What is the capital of France?", "top_k": 5}"#).unwrap();
+        let result_ptr = unsafe { memvid_ask(handle, ask_json.as_ptr(), &mut error) };
+
+        if result_ptr.is_null() {
+            let msg = if !error.message.is_null() {
+                unsafe { std::ffi::CStr::from_ptr(error.message) }
+                    .to_str()
+                    .unwrap_or("unknown")
+            } else {
+                "no message"
+            };
+            panic!("memvid_ask failed: {:?} - {}", error.code, msg);
+        }
+        assert_eq!(error.code, MemvidErrorCode::Ok);
+
+        let result_str = unsafe { std::ffi::CStr::from_ptr(result_ptr) };
+        let json = result_str.to_str().unwrap();
+
+        // Verify response structure
+        assert!(json.contains("\"question\""));
+        assert!(json.contains("\"context_only\":true"));
+        assert!(json.contains("\"retrieval\""));
+        assert!(json.contains("\"stats\""));
+        assert!(json.contains("\"context_fragments\""));
+
+        unsafe { memvid_string_free(result_ptr) };
+        unsafe { memvid_close(handle) };
         let _ = std::fs::remove_file(&path);
     }
 

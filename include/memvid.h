@@ -496,6 +496,52 @@ char *memvid_timeline(MemvidHandle *handle, const char *query_json, MemvidError 
 char *memvid_verify(const char *path, int deep, MemvidError *error);
 
 /* ============================================================================
+ * RAG/Ask Functions
+ * ============================================================================ */
+
+/**
+ * Ask a question using RAG (Retrieval-Augmented Generation).
+ *
+ * Performs context retrieval based on the question. When context_only is true
+ * (the default), returns retrieved context without synthesis. Answer synthesis
+ * requires an external LLM.
+ *
+ * @param handle        Valid Memvid handle
+ * @param request_json  JSON string with ask parameters
+ * @param error         Out-parameter for error information (may be NULL)
+ *
+ * @return JSON string with ask response on success, NULL on failure.
+ *         Caller must free with memvid_string_free().
+ *
+ * Request JSON Schema:
+ * {
+ *   "question": "What is the capital of France?",
+ *   "top_k": 10,
+ *   "snippet_chars": 200,
+ *   "uri": null,
+ *   "scope": null,
+ *   "context_only": true,
+ *   "mode": "hybrid"
+ * }
+ *
+ * Mode values: "lex", "sem", "hybrid" (default: "hybrid")
+ *
+ * Response JSON Schema:
+ * {
+ *   "question": "...",
+ *   "mode": "hybrid",
+ *   "retriever": "lex",
+ *   "context_only": true,
+ *   "retrieval": { "query": "...", "hits": [...], ... },
+ *   "answer": null,
+ *   "citations": [...],
+ *   "context_fragments": [...],
+ *   "stats": { "retrieval_ms": 5, "synthesis_ms": 0, "latency_ms": 5 }
+ * }
+ */
+char *memvid_ask(MemvidHandle *handle, const char *request_json, MemvidError *error);
+
+/* ============================================================================
  * Memory Management Functions
  * ============================================================================ */
 
