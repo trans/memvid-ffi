@@ -564,4 +564,259 @@ mod tests {
         unsafe { memvid_string_free(report_ptr) };
         let _ = std::fs::remove_file(&path);
     }
+
+    // ==========================================================================
+    // Edge Case Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_empty_content() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_empty_content.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+
+        // Put empty content
+        let content = b"";
+        let frame_id =
+            unsafe { memvid_put_bytes(handle, content.as_ptr(), content.len(), &mut error) };
+        // Should succeed even with empty content
+        assert!(frame_id > 0 || error.code == MemvidErrorCode::Ok);
+
+        unsafe { memvid_commit(handle, &mut error) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_unicode_content() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_unicode.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+
+        // Put unicode content
+        let content = "Hello 世界! 🎉 Привет мир! مرحبا بالعالم";
+        let content_bytes = content.as_bytes();
+        let _frame_id = unsafe {
+            memvid_put_bytes(handle, content_bytes.as_ptr(), content_bytes.len(), &mut error)
+        };
+        unsafe { memvid_commit(handle, &mut error) };
+        unsafe { memvid_close(handle) };
+
+        // Reopen and verify content
+        let handle = unsafe { memvid_open(path_cstr.as_ptr(), &mut error) };
+        let content_ptr = unsafe { memvid_frame_content(handle, 0, &mut error) };
+        assert!(!content_ptr.is_null());
+
+        let content_str = unsafe { std::ffi::CStr::from_ptr(content_ptr) };
+        let retrieved = content_str.to_str().unwrap();
+        assert!(retrieved.contains("世界"));
+        assert!(retrieved.contains("🎉"));
+
+        unsafe { memvid_string_free(content_ptr) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_search_no_results() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_search_no_results.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+
+        let content = b"The quick brown fox jumps over the lazy dog.";
+        unsafe { memvid_put_bytes(handle, content.as_ptr(), content.len(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+
+        // Search for something not in the content
+        let search_json = CString::new(r#"{"query": "elephant zebra giraffe", "top_k": 5}"#).unwrap();
+        let result_ptr = unsafe { memvid_search(handle, search_json.as_ptr(), &mut error) };
+
+        assert!(!result_ptr.is_null());
+        let result_str = unsafe { std::ffi::CStr::from_ptr(result_ptr) };
+        let json = result_str.to_str().unwrap();
+        // Should have empty hits array
+        assert!(json.contains("\"hits\":[]") || json.contains("\"hits\": []"));
+
+        unsafe { memvid_string_free(result_ptr) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_search_empty_memory() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_search_empty.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+
+        // Search empty memory
+        let search_json = CString::new(r#"{"query": "anything", "top_k": 5}"#).unwrap();
+        let result_ptr = unsafe { memvid_search(handle, search_json.as_ptr(), &mut error) };
+
+        assert!(!result_ptr.is_null());
+        let result_str = unsafe { std::ffi::CStr::from_ptr(result_ptr) };
+        let json = result_str.to_str().unwrap();
+        assert!(json.contains("hits"));
+
+        unsafe { memvid_string_free(result_ptr) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_null_pointer_handling() {
+        let mut error = MemvidError::ok();
+
+        // Null path to create
+        let handle = unsafe { memvid_create(std::ptr::null(), &mut error) };
+        assert!(handle.is_null());
+        assert_eq!(error.code, MemvidErrorCode::NullPointer);
+        unsafe { memvid_error_free(&mut error) };
+
+        // Null path to open
+        let handle = unsafe { memvid_open(std::ptr::null(), &mut error) };
+        assert!(handle.is_null());
+        assert_eq!(error.code, MemvidErrorCode::NullPointer);
+        unsafe { memvid_error_free(&mut error) };
+
+        // Null handle to close (should not crash)
+        unsafe { memvid_close(std::ptr::null_mut()) };
+    }
+
+    // Note: test_invalid_handle removed - using garbage pointers causes undefined behavior
+    // The FFI layer validates handles but can't protect against completely invalid memory
+
+    #[test]
+    fn test_persistence_round_trip() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_round_trip.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+
+        // Create memory, add content, close
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+
+        let content1 = b"First document for persistence test.";
+        let content2 = b"Second document for persistence test.";
+        let content3 = b"Third document for persistence test.";
+        unsafe { memvid_put_bytes(handle, content1.as_ptr(), content1.len(), &mut error) };
+        unsafe { memvid_put_bytes(handle, content2.as_ptr(), content2.len(), &mut error) };
+        unsafe { memvid_put_bytes(handle, content3.as_ptr(), content3.len(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+        unsafe { memvid_close(handle) };
+
+        // Reopen and verify everything persisted
+        let handle = unsafe { memvid_open(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+
+        let count = unsafe { memvid_frame_count(handle, &mut error) };
+        assert_eq!(count, 3);
+
+        // Verify content
+        let content_ptr = unsafe { memvid_frame_content(handle, 0, &mut error) };
+        assert!(!content_ptr.is_null());
+        let content_str = unsafe { std::ffi::CStr::from_ptr(content_ptr) };
+        assert!(content_str.to_str().unwrap().contains("First document"));
+        unsafe { memvid_string_free(content_ptr) };
+
+        // Search should still work
+        let search_json = CString::new(r#"{"query": "persistence test", "top_k": 10}"#).unwrap();
+        let result_ptr = unsafe { memvid_search(handle, search_json.as_ptr(), &mut error) };
+        assert!(!result_ptr.is_null());
+
+        let result_str = unsafe { std::ffi::CStr::from_ptr(result_ptr) };
+        let json = result_str.to_str().unwrap();
+        assert!(json.contains("hits"));
+
+        unsafe { memvid_string_free(result_ptr) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_many_frames() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_many_frames.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        assert!(!handle.is_null());
+
+        // Add 50 frames
+        for i in 0..50 {
+            let content = format!("Document number {} with some searchable content.", i);
+            let content_bytes = content.as_bytes();
+            unsafe {
+                memvid_put_bytes(handle, content_bytes.as_ptr(), content_bytes.len(), &mut error)
+            };
+        }
+        unsafe { memvid_commit(handle, &mut error) };
+
+        // Verify count
+        let count = unsafe { memvid_frame_count(handle, &mut error) };
+        assert_eq!(count, 50);
+
+        // Search should still work
+        let search_json = CString::new(r#"{"query": "Document number", "top_k": 100}"#).unwrap();
+        let result_ptr = unsafe { memvid_search(handle, search_json.as_ptr(), &mut error) };
+        assert!(!result_ptr.is_null());
+
+        unsafe { memvid_string_free(result_ptr) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_timeline_empty_memory() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_ffi_timeline_empty.mv2");
+        let path_cstr = CString::new(path.to_str().unwrap()).unwrap();
+
+        let mut error = MemvidError::ok();
+        let handle = unsafe { memvid_create(path_cstr.as_ptr(), &mut error) };
+        unsafe { memvid_commit(handle, &mut error) };
+
+        let timeline_ptr = unsafe { memvid_timeline(handle, std::ptr::null(), &mut error) };
+        assert!(!timeline_ptr.is_null());
+
+        let timeline_str = unsafe { std::ffi::CStr::from_ptr(timeline_ptr) };
+        let json = timeline_str.to_str().unwrap();
+        assert!(json.contains("\"count\":0"));
+
+        unsafe { memvid_string_free(timeline_ptr) };
+        unsafe { memvid_close(handle) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_verify_nonexistent_file() {
+        let mut error = MemvidError::ok();
+        let path = CString::new("/nonexistent/path/to/file.mv2").unwrap();
+
+        let report_ptr = unsafe { memvid_verify(path.as_ptr(), 0, &mut error) };
+        assert!(report_ptr.is_null());
+        assert_ne!(error.code, MemvidErrorCode::Ok);
+
+        unsafe { memvid_error_free(&mut error) };
+    }
+
+    // Note: test_double_close removed - double-free is undefined behavior
+    // The Crystal wrapper handles this safely by tracking closed state
 }
