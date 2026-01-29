@@ -1,0 +1,28 @@
+[package]
+name = "memvid-ffi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+license = "Apache-2.0"
+description = "C FFI bindings for memvid-core"
+repository = "https://github.com/trans/memvid-ffi"
+
+[lib]
+name = "memvid"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+memvid-core = { git = "https://github.com/memvid/memvid.git" }
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[build-dependencies]
+cbindgen = "0.27"
+
+[features]
+default = ["lex"]
+lex = ["memvid-core/lex"]
+vec = ["memvid-core/vec"]
+clip = ["memvid-core/clip", "vec"]
+full = ["lex", "vec", "clip"]
